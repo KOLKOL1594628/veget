@@ -18,7 +18,6 @@ class GameEngine:
         self.video = None
         self.video_playing = False
         self.running = True
-        self.pygame = pygame  # 添加这行暴露pygame模块
 
     def BG(self, image_path):
         """设置背景图片"""
@@ -138,7 +137,6 @@ class GameEngine:
         pygame.quit()
 
 # 示例用法
-"""
 if __name__ == "__main__":
     # 初始化游戏引擎
     game = GameEngine(800, 600)
@@ -160,4 +158,3 @@ if __name__ == "__main__":
     game.add_button(300, 200, "播放背景音乐", on_button_click)
 
     # 运行游戏
-"""
