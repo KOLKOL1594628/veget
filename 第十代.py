@@ -1,4 +1,3 @@
-# 第十代.py
 import pygame
 import sys
 import random
@@ -8,6 +7,7 @@ import pickle
 import struct
 import time
 import traceback
+import select
 
 # 游戏配置
 SCREEN_WIDTH = 800
@@ -15,8 +15,8 @@ SCREEN_HEIGHT = 600
 FPS = 60
 
 # 服务器配置
-SERVER_IP = '127.0.0.1'  # 更改为您的服务器IP
-SERVER_PORT = 5555
+SERVER_IP = 'cn-bj-1.govfrp.com'
+SERVER_PORT = 64702
 
 # 颜色定义
 BACKGROUND = (25, 25, 40)
@@ -44,7 +44,7 @@ class Player:
         self.velocity_y = 0
         self.on_ground = False
         self.lives = 3
-        self.player_id = str(player_id) if player_id else None  # 确保ID是字符串
+        self.player_id = str(player_id) if player_id else None
         self.is_local = is_local
         self.skills = {
             'high_jump': {'cooldown': 0, 'max_cooldown': 60, 'active': False}
@@ -132,7 +132,7 @@ class Player:
             name_text = font.render(f"{self.name}", True, WHITE)
             screen.blit(name_text, (self.rect.centerx - name_text.get_width()//2, self.rect.top - 45))
             
-            id_text = font.render(f"ID:{self.player_id[:8]}", True, WHITE)  # 只显示部分ID
+            id_text = font.render(f"ID:{self.player_id[:8]}", True, WHITE)
             screen.blit(id_text, (self.rect.centerx - id_text.get_width()//2, self.rect.top - 25))
 
 class Ground:
@@ -233,7 +233,7 @@ class Game:
         
         # 游戏状态
         self.running = True
-        self.game_state = "mode_selection"  # mode_selection, playing, next_level, game_over
+        self.game_state = "mode_selection"
         self.level = 1
         self.is_multiplayer = False
         self.score = 0
@@ -248,11 +248,12 @@ class Game:
         # 多人游戏
         self.client_socket = None
         self.player_id = None
-        self.other_players = {}  # 存储其他玩家实体
+        self.other_players = {}
         self.receive_thread = None
         self.heartbeat_thread = None
         self.last_send_time = 0
         self.server_connected = False
+        self.last_receive_time = 0  # 记录最后接收数据时间
         
         # 初始化游戏对象
         self.init_game_objects()
@@ -314,9 +315,12 @@ class Game:
     def connect_to_server(self):
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.settimeout(5.0)  # 设置连接超时
+            self.client_socket.settimeout(5.0)
             self.client_socket.connect((SERVER_IP, SERVER_PORT))
             self.server_connected = True
+            
+            # 记录连接时间
+            self.last_receive_time = time.time()
             
             # 启动接收线程
             self.receive_thread = threading.Thread(target=self.receive_server_data)
@@ -329,6 +333,10 @@ class Game:
             self.heartbeat_thread.start()
             
             print("已连接到服务器")
+        except socket.timeout:
+            print("连接服务器超时")
+            self.server_connected = False
+            self.is_multiplayer = False
         except Exception as e:
             print(f"连接服务器失败: {e}")
             self.server_connected = False
@@ -338,6 +346,10 @@ class Game:
         while self.running and self.server_connected:
             try:
                 data = self.recv_data(self.client_socket)
+                
+                # 更新最后接收时间
+                self.last_receive_time = time.time()
+                
                 if not data:
                     print("服务器断开连接")
                     self.server_connected = False
@@ -353,13 +365,13 @@ class Game:
                 
                 if msg_type == 'init':
                     # 服务器初始化数据
-                    self.player_id = str(message.get('id'))  # 确保ID是字符串
+                    self.player_id = str(message.get('id'))
                     self.level = message.get('level', 1)
                     
                     # 初始化其他玩家
                     players = message.get('players', {})
                     for pid, pdata in players.items():
-                        pid = str(pid)  # 确保ID是字符串
+                        pid = str(pid)
                         if pid != self.player_id:
                             self.other_players[pid] = Player(
                                 pdata['x'], 
@@ -382,7 +394,7 @@ class Game:
                     self.monster.rect.y = monster_pos[1]
                 
                 elif msg_type == 'player_update':
-                    player_id = str(message['id'])  # 确保ID是字符串
+                    player_id = str(message['id'])
                     if player_id != self.player_id:
                         if player_id in self.other_players:
                             # 更新现有玩家
@@ -402,7 +414,7 @@ class Game:
                             )
                 
                 elif msg_type == 'player_joined':
-                    player_id = str(message['id'])  # 确保ID是字符串
+                    player_id = str(message['id'])
                     if player_id != self.player_id and player_id not in self.other_players:
                         print(f"新玩家加入: {player_id}")
                         self.other_players[player_id] = Player(
@@ -414,7 +426,7 @@ class Game:
                         )
                 
                 elif msg_type == 'player_left':
-                    player_id = str(message['id'])  # 确保ID是字符串
+                    player_id = str(message['id'])
                     if player_id in self.other_players:
                         print(f"玩家离开: {player_id}")
                         del self.other_players[player_id]
@@ -451,14 +463,26 @@ class Game:
                     if self.is_multiplayer and self.server_connected:
                         self.game_state = "next_level"
                 
+            except socket.timeout:
+                # 检查是否超过总超时
+                if time.time() - self.last_receive_time > 30:
+                    print("30秒内未收到任何消息，断开连接")
+                    self.server_connected = False
+                    break
+                continue
             except (ConnectionResetError, BrokenPipeError):
                 print("连接被服务器重置")
                 self.server_connected = False
                 break
             except Exception as e:
                 print(f"接收服务器数据错误: {e}")
-                # 不要立即断开，尝试继续接收
+                # 检查是否超过总超时
+                if time.time() - self.last_receive_time > 30:
+                    print("30秒内未收到任何消息，断开连接")
+                    self.server_connected = False
+                    break
                 time.sleep(0.1)
+        print("接收线程结束")
     
     def send_player_update(self):
         if not self.server_connected or not self.is_multiplayer:
@@ -476,6 +500,8 @@ class Game:
         except (ConnectionResetError, BrokenPipeError):
             print("连接中断，无法发送更新")
             self.server_connected = False
+        except socket.timeout:
+            print("发送玩家更新超时")
         except Exception as e:
             print(f"发送玩家更新失败: {e}")
     
@@ -484,11 +510,13 @@ class Game:
             try:
                 heartbeat = {'type': 'heartbeat'}
                 self.send_data(self.client_socket, heartbeat)
-                time.sleep(5)  # 每5秒发送一次心跳
+                time.sleep(5)
             except (ConnectionResetError, BrokenPipeError):
                 print("连接中断，无法发送心跳")
                 self.server_connected = False
                 break
+            except socket.timeout:
+                print("发送心跳超时")
             except Exception as e:
                 print(f"发送心跳失败: {e}")
                 self.server_connected = False
@@ -508,6 +536,8 @@ class Game:
         except (ConnectionResetError, BrokenPipeError):
             print("连接中断，无法发送关卡更新")
             self.server_connected = False
+        except socket.timeout:
+            print("发送关卡更新超时")
         except Exception as e:
             print(f"发送关卡更新失败: {e}")
     
@@ -517,16 +547,23 @@ class Game:
             sock.sendall(struct.pack('!I', len(payload)) + payload)
         except (ConnectionResetError, BrokenPipeError):
             raise
+        except socket.timeout:
+            print("发送数据超时")
         except Exception as e:
             print(f"发送数据失败: {e}")
     
     def recv_data(self, sock):
         try:
+            # 设置socket超时
+            sock.settimeout(10.0)
             header = self.recvall(sock, 4)
             if not header:
                 return None
             length = struct.unpack('!I', header)[0]
             return self.recvall(sock, length)
+        except socket.timeout:
+            print("接收数据超时")
+            return None
         except (ConnectionResetError, BrokenPipeError):
             return None
         except Exception as e:
@@ -535,12 +572,26 @@ class Game:
     
     def recvall(self, sock, length):
         data = bytearray()
+        start_time = time.time()
+        timeout = 15.0  # 设置15秒总超时
+        
         while len(data) < length:
             try:
+                # 设置每次接收超时
+                sock.settimeout(5.0)
                 packet = sock.recv(length - len(data))
                 if not packet:
                     return None
                 data.extend(packet)
+                
+                # 重置超时计时器
+                start_time = time.time()
+            except socket.timeout:
+                # 检查总超时
+                if time.time() - start_time > timeout:
+                    print("接收数据包总超时")
+                    return None
+                continue
             except (ConnectionResetError, BrokenPipeError):
                 return None
             except Exception as e:
@@ -726,6 +777,11 @@ class Game:
             if not self.server_connected:
                 status_text = self.small_font.render("服务器连接已断开", True, (255, 100, 100))
                 self.screen.blit(status_text, (20, 380))
+            else:
+                # 显示网络延迟
+                time_since_last = time.time() - self.last_receive_time
+                latency_text = self.small_font.render(f"延迟: {int(time_since_last*1000)}ms", True, (150, 200, 255))
+                self.screen.blit(latency_text, (20, 410))
         
         # 技能状态
         if self.player.skills['high_jump']['cooldown'] > 0:
