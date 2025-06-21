@@ -1,5 +1,4 @@
 import pygame
-import moviepy as mp
 import os
 import requests
 from io import BytesIO
@@ -18,6 +17,7 @@ class GameEngine:
         self.video = None
         self.video_playing = False
         self.running = True
+        self.pygame = pygame  # 添加这行暴露pygame模块
 
     def BG(self, image_path):
         """设置背景图片"""
@@ -54,11 +54,6 @@ class GameEngine:
         except Exception as e:
             print(f"播放音乐时出错: {e}")
 
-    def play_video(self, video_path):
-        """播放视频"""
-        self.video = mp.VideoFileClip(video_path)
-        self.video.preview()
-        self.video_playing = True
 
     def check_collision(self, char1_index, char2_index):
         """检测两个角色是否碰撞"""
@@ -137,6 +132,7 @@ class GameEngine:
         pygame.quit()
 
 # 示例用法
+"""
 if __name__ == "__main__":
     # 初始化游戏引擎
     game = GameEngine(800, 600)
@@ -158,3 +154,4 @@ if __name__ == "__main__":
     game.add_button(300, 200, "播放背景音乐", on_button_click)
 
     # 运行游戏
+"""
