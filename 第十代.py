@@ -36,6 +36,9 @@ TEXT_COLOR = (240, 248, 255)
 BLACK = (0, 0, 0)
 LEVEL_COLORS = [(65, 105, 225), (50, 205, 50), (220, 20, 60)]
 CONNECTION_COLORS = [(100, 255, 100), (255, 255, 0), (255, 100, 100)]
+UI_BUTTON_COLOR = (80, 80, 120, 180)
+UI_BUTTON_HOVER = (100, 100, 150, 200)
+UI_BUTTON_ACTIVE = (120, 120, 180, 220)
 
 class Player:
     def __init__(self, x, y, player_id=None, is_local=False, name=None):
@@ -57,7 +60,7 @@ class Player:
         self.name = name if name else f"玩家{random.randint(1, 99)}"
         self.last_position = (x, y)
     
-    def update(self, keys, ground, walls):
+    def update(self, keys, ground, walls, left_pressed=False, right_pressed=False):
         if not self.is_local:
             return
             
@@ -74,10 +77,10 @@ class Player:
         elif self.coyote_time > 0:
             self.coyote_time -= 1
         
-        # 水平移动
-        if keys[pygame.K_LEFT]:
+        # 水平移动 - 支持键盘和UI按钮
+        if keys[pygame.K_LEFT] or left_pressed:
             self.rect.x -= self.speed
-        if keys[pygame.K_RIGHT]:
+        if keys[pygame.K_RIGHT] or right_pressed:
             self.rect.x += self.speed
         
         # 应用重力
@@ -217,6 +220,52 @@ class Button:
                 self.action()
                 return True
         return False
+
+class UIButton:
+    """用于屏幕控制按钮的类（左、右、跳跃）"""
+    def __init__(self, x, y, width, height, button_type):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.button_type = button_type  # 'left', 'right', 'jump'
+        self.pressed = False
+        self.radius = min(width, height) // 2
+    
+    def draw(self, screen):
+        # 创建半透明表面
+        button_surface = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        
+        # 根据按钮状态选择颜色
+        if self.pressed:
+            color = UI_BUTTON_ACTIVE
+        else:
+            color = UI_BUTTON_COLOR
+        
+        # 绘制圆形按钮
+        pygame.draw.circle(button_surface, color, (self.radius, self.radius), self.radius)
+        
+        # 绘制按钮图标
+        if self.button_type == 'left':
+            # 左箭头
+            pygame.draw.polygon(button_surface, WHITE, [
+                (self.radius + 10, self.radius - 8),
+                (self.radius - 10, self.radius),
+                (self.radius + 10, self.radius + 8)
+            ])
+        elif self.button_type == 'right':
+            # 右箭头
+            pygame.draw.polygon(button_surface, WHITE, [
+                (self.radius - 10, self.radius - 8),
+                (self.radius + 10, self.radius),
+                (self.radius - 10, self.radius + 8)
+            ])
+        elif self.button_type == 'jump':
+            # 跳跃图标（向上的箭头）
+            pygame.draw.polygon(button_surface, WHITE, [
+                (self.radius, self.radius - 10),
+                (self.radius - 8, self.radius + 5),
+                (self.radius + 8, self.radius + 5)
+            ])
+        
+        screen.blit(button_surface, self.rect)
 
 class NetworkManager:
     def __init__(self, game):
@@ -616,7 +665,7 @@ class Game:
         pygame.mixer.init()
         
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("多人平台游戏 - 网络优化版")
+        pygame.display.set_caption("多人平台游戏 - 可靠按钮控制版")
         
         self.clock = pygame.time.Clock()
         
@@ -649,6 +698,19 @@ class Game:
         self.network = NetworkManager(self)
         self.last_send_time = 0
         self.connection_lost = False
+        
+        # UI控制按钮
+        self.ui_buttons = []
+        self.left_pressed = False
+        self.right_pressed = False
+        self.jump_triggered = False
+        
+        # 按钮状态跟踪
+        self.button_states = {
+            'left': False,
+            'right': False,
+            'jump': False
+        }
         
         # 初始化游戏对象
         self.init_game_objects()
@@ -695,6 +757,17 @@ class Game:
         
         # 重新连接按钮
         self.reconnect_button = Button(SCREEN_WIDTH//2 - 100, 300, 200, 50, "重新连接", self.reconnect_to_server)
+        
+        # UI控制按钮（左、右、跳跃）
+        button_size = 70
+        button_margin = 20
+        button_y = SCREEN_HEIGHT - button_size - button_margin
+        
+        self.left_button = UIButton(button_margin, button_y, button_size, button_size, 'left')
+        self.right_button = UIButton(button_margin + button_size + 20, button_y, button_size, button_size, 'right')
+        self.jump_button = UIButton(SCREEN_WIDTH - button_size - button_margin, button_y, button_size, button_size, 'jump')
+        
+        self.ui_buttons = [self.left_button, self.right_button, self.jump_button]
     
     def start_single_player(self):
         self.is_multiplayer = False
@@ -792,6 +865,25 @@ class Game:
             
             # 游戏内事件
             elif self.game_state == "playing":
+                # 鼠标按下事件
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.left_button.rect.collidepoint(event.pos):
+                        self.button_states['left'] = True
+                    elif self.right_button.rect.collidepoint(event.pos):
+                        self.button_states['right'] = True
+                    elif self.jump_button.rect.collidepoint(event.pos):
+                        self.button_states['jump'] = True
+                        self.jump_triggered = True
+                
+                # 鼠标释放事件
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    self.button_states = {
+                        'left': False,
+                        'right': False,
+                        'jump': False
+                    }
+                
+                # 键盘事件
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_1 and self.player.skills['high_jump']['cooldown'] == 0:
                         self.player.skills['high_jump']['active'] = True
@@ -810,13 +902,70 @@ class Game:
                     if event.key in [pygame.K_SPACE, pygame.K_UP] and self.player.velocity_y < -5:
                         self.player.velocity_y = -5
     
+    def update_button_states(self):
+        """每帧更新按钮状态，支持同时按下多个按钮"""
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        
+        # 如果鼠标左键按下，检查按钮状态
+        if mouse_pressed[0]:
+            # 左按钮状态
+            if self.left_button.rect.collidepoint(mouse_pos):
+                self.button_states['left'] = True
+            else:
+                self.button_states['left'] = False
+                
+            # 右按钮状态
+            if self.right_button.rect.collidepoint(mouse_pos):
+                self.button_states['right'] = True
+            else:
+                self.button_states['right'] = False
+                
+            # 跳跃按钮状态
+            if self.jump_button.rect.collidepoint(mouse_pos):
+                self.button_states['jump'] = True
+            else:
+                self.button_states['jump'] = False
+        else:
+            # 鼠标左键没有按下时，所有按钮都释放
+            self.button_states = {
+                'left': False,
+                'right': False,
+                'jump': False
+            }
+    
     def update(self):
         if self.game_state != "playing":
             return
         
+        # 更新按钮状态
+        self.update_button_states()
+        
+        # 设置移动状态
+        self.left_pressed = self.button_states['left']
+        self.right_pressed = self.button_states['right']
+        
+        # 更新按钮的pressed状态用于绘制
+        self.left_button.pressed = self.left_pressed
+        self.right_button.pressed = self.right_pressed
+        self.jump_button.pressed = self.button_states['jump']
+        
         keys = pygame.key.get_pressed()
-        self.player.update(keys, self.ground, self.walls)
+        self.player.update(keys, self.ground, self.walls, self.left_pressed, self.right_pressed)
         self.monster.update()
+        
+        # 处理跳跃触发
+        if self.button_states['jump'] or self.jump_triggered:
+            if self.player.on_ground or self.player.coyote_time > 0 or self.player.jump_buffer > 0:
+                if self.player.skills['high_jump']['active']:
+                    self.player.velocity_y = self.player.jump_power * 1.8
+                    self.player.skills['high_jump']['active'] = False
+                else:
+                    self.player.velocity_y = self.player.jump_power
+                self.player.on_ground = False
+                self.player.coyote_time = 0
+                self.player.jump_buffer = 0
+            self.jump_triggered = False
         
         # 处理网络消息
         if self.is_multiplayer:
@@ -968,6 +1117,11 @@ class Game:
             (SCREEN_WIDTH - 60, 340),
             (SCREEN_WIDTH - 20, 320)
         ])
+        
+        # 绘制控制按钮（在游戏进行时显示）
+        if self.game_state == "playing":
+            for button in self.ui_buttons:
+                button.draw(self.screen)
         
         # 绘制连接丢失界面
         if self.connection_lost:
